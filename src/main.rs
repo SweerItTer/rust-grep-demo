@@ -1,3 +1,9 @@
+#[path = "args/args.rs"]
+mod args;
+use args::Args;
+
 fn main() {
-    println!("Hello, world!");
+    let args = Args::parse();
+
+    println!("pattern = {}", args.pattern);
 }
