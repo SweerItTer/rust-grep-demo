@@ -1,30 +1,37 @@
-use std::{path::PathBuf, sync::OnceLock};
+use std::path::PathBuf;
+use memchr::memmem;
+use crate::cli::Cli;
 
 
 pub struct MyGrep {
-    current_running_path: OnceLock<PathBuf>,
+    cli: Cli,
 }
 
 impl MyGrep {
 
     // 初始化
+    #[inline]
     #[must_use]
-    pub const fn new() -> Self {
-        MyGrep { current_running_path: OnceLock::new() }
+    pub const fn new(cli:Cli) -> Self {
+        MyGrep {
+            cli: cli
+        }
     }
 
-    /* 先获取当前的路径 */
-    pub fn get_current_running_path(&self) -> &PathBuf {
-        self.current_running_path.get_or_init(|| {
-        std::env::current_dir().unwrap_or_else(|e| {
-                eprintln!("获取运行路径失败, {}", e);
-                std::process::exit(1);
-            })
-        })
+    pub fn list_all_files(
+        &self,
+        dirs: &mut Vec<PathBuf>, 
+        files: &mut Vec<PathBuf>
+    ) -> std::io::Result<()> {
+        self.list_all_files_(
+            &self.cli.path,
+            dirs,
+            files            
+        )
     }
 
     /* 列出所有可继续递归的文件夹 */
-    pub fn list_all_dir(
+    fn list_all_files_(
         &self, 
         path: &PathBuf, 
         dirs: &mut Vec<PathBuf>, 
@@ -42,34 +49,44 @@ impl MyGrep {
         for entry in entries {
             // 取出 entry.Ok, 并自动上报错误
             let entry = entry?;
+
             // 获取文件类型
             let file_type = entry.file_type()?; 
-
             // 获取完整的文件路径
             let full_path: PathBuf = entry.path();
 
             // 判断文件类型
-            if file_type.is_dir() {
+            if file_type.is_dir() && self.cli.recursive {
                 // 递归文件夹
-                self.list_all_dir(&full_path, dirs, files)?;
+                self.list_all_files_(&full_path, dirs, files)?;
                 // TODO: 后续类似 --type d 时才记录
                 // 缓存对应的类型
                 // dirs.push(full_path);
+            } else if file_type.is_symlink() && self.cli.follow {
+                // TODO: 跟随软链接
             } else if file_type.is_file() {
                 files.push(full_path);
-            } else if file_type.is_symlink() {
-                // TODO: `-R` 跟随软链接
-            }
+            } 
         }
         Ok(())
     }
 }
 
+// struct MatchLine {
+//     line_number: usize,   // 行号，usize 更自然
+//     text: String,         // 这一行的内容
+// }
 
-
-/* 遍历所有可读文件，做关键词查找 */
-// use memchr::memmem;
-
+// /* 遍历所有可读文件，做关键词查找 */
+// impl MyGrep {
+//     pub fn find_str() -> std::io::Result<()> {
+//         let res = Matched {
+//             line_num: 0,
+//             line_text: ""
+//         };
+//         Ok(res)
+//     }
+// }
 
 
 /* 收集完后把文件路径缓存，再去读取来匹配 */
