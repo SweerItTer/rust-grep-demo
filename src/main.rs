@@ -1,12 +1,15 @@
-// use std::io::{self, Write};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use clap::Parser;
 
 mod grep;
 mod cli;
-
+mod colorful;
 use grep::MyGrep;
 use cli::Cli;
+use std::sync::LazyLock;
+
+static IS_TERMINAL: LazyLock<bool> = LazyLock::new(|| std::io::stdout().is_terminal());
 
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();    
@@ -19,13 +22,5 @@ fn main() -> std::io::Result<()> {
 
     obj.grep(&files);
 
-    // let stdout = io::stdout();
-    // let mut out = io::BufWriter::new(stdout.lock());
-    // for file in files{
-    //     if writeln!(out, "{}", file.display()).is_err() {
-    //         break;   // 写失败就停，不 panic
-    //     }    
-    // }
-    // _ = out.flush();
     Ok(())
 }

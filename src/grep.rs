@@ -1,8 +1,34 @@
 use std::{io::BufReader, io::BufRead, path::PathBuf};
+use std::sync::LazyLock;
 use memchr::memmem;
 use crate::cli::Cli;
 use content_inspector::inspect;
+use crate::colorful::{PrinterAttr, Color, colorful_contact};
+use crate::IS_TERMINAL;
 
+/*
+ * stdout 指向的文件身份 (st_dev, st_ino)
+ * 路径不参与判断: 硬链接/软链接/`./` 等等价写法都会落到同一个 inode
+ * 只在 stdout 是普通文件时才有意义 (管道、tty、/dev/null 无需比较)
+ */
+static STDOUT_ID: LazyLock<Option<(u64, u64)>> = LazyLock::new(|| {
+    use std::os::unix::fs::MetadataExt;
+    // Linux 用 /proc/self/fd, BSD/macOS 用 /dev/fd
+    let probe = if cfg!(target_os = "linux") { "/proc/self/fd/1" } else { "/dev/fd/1" };
+    std::fs::metadata(probe)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .map(|m| (m.dev(), m.ino()))
+});
+
+/* 该文件是否就是 stdout 本身 */
+fn is_stdout(file: &std::fs::File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (*STDOUT_ID, file.metadata()) {
+        (Some((dev, ino)), Ok(m)) => m.is_file() && m.dev() == dev && m.ino() == ino,
+        _ => false,
+    }
+}
 
 pub struct MyGrep {
     cli: Cli,
@@ -90,6 +116,15 @@ impl MyGrep {
             }
         };
         /*
+         * 输入就是 stdout 时先跳过
+         * 否则会边读边把匹配行追加到自己后面, 永远读不到 EOF
+         * 用打开后的 fd 判断, 避免 stat 与 open 之间的竞态
+         */
+        if is_stdout(&file) {
+            eprintln!("{}: input file is also the output", file_path.display());
+            return Ok(())
+        }
+        /*
          * BufReader<R> 可以提升对同一文件或网络套接字进行少量且重复读取调用的程序的速度
          * 在一次性读取大量数据、仅读取一次或少数几次时，它并无帮助
          * 从内存中已有的数据源（如 Vec<u8>）读取时，它也不具备任何优势
@@ -107,7 +142,7 @@ impl MyGrep {
         // 行号
         let mut index: usize = 0;
         // 匹配目标长度
-        let _length: usize = finder.needle().len();
+        let length: usize = finder.needle().len();
 
         loop {
             // 清空上一次的结果
@@ -119,20 +154,41 @@ impl MyGrep {
             // 行号+1
             index = index + 1;
 
+            // 去掉末尾的换行符
+            if line.last() == Some(&b'\n') { line.pop(); }
+
             // 匹配关键词
-            let mut it = finder.find_iter(&line);
+            let it = finder.find_iter(&line);
             
             // 无匹配结果
-            if !it.any(|_| true) {
+            if !it.clone().any(|_| true) {
                 continue;
             }
-            // TODO: 用红色标记关键词, 当前已有 &line, it, length
+            
+            let mut raw_context = String::from_utf8_lossy(&line).to_string();
+
+            if *IS_TERMINAL {
+                // 终端输出时, 高亮显示匹配结果
+                let mut attrs: Vec<PrinterAttr> = Vec::new();
+                for start in it {
+                    attrs.push(
+                        PrinterAttr {
+                            color: Color::Red,
+                            position: start..start + length,
+                        }
+                    );
+                }
+                colorful_contact(&mut raw_context, &attrs);
+            } 
             println!(
-                "{}:{}:{}",
-                file_path.display(),
-                index,
-                String::from_utf8_lossy(&line),
-            );
+                "{}",
+                format!(
+                    "{}:{}:{}",
+                    file_path.display(),
+                    index,
+                    &raw_context
+                )
+            );        
             // 匹配完后进入下一轮循环
         }
 
